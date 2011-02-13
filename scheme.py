@@ -33,7 +33,9 @@ def is_valid(tokens):
            len(tokens) > 2 and \
            is_balanced(tokens)
 
+
 ####
+
 
 class Function(object):
     def __init__(self, return_type, argument_types):
@@ -42,6 +44,7 @@ class Function(object):
 
     def arity(self):
         return len(self.argument_types)
+
 
 class NaryFunction(Function):
     def __init__(self, return_type, argument_types, operation):
@@ -53,6 +56,7 @@ class NaryFunction(Function):
         args = [xs.next().stype for i in xrange(self.arity())]
         return self.operation(*args)
 
+
 class Constant(Function):
     def __init__(return_type, value):
         Function.__init__(self, return_type, [])
@@ -61,7 +65,9 @@ class Constant(Function):
     def apply(self, xs=None):
         return this.value
 
+
 ####
+
 
 class SType(object): 
     type_name = "type"
@@ -72,6 +78,7 @@ class SType(object):
         return self.__str__()
     def __str__(self):
         return '<SType type_name="%s" value="%s" token="%s" />' % (self.type_name, self.value, self.token) 
+
 
 class ParenType(SType):
     type_name = "paren"
@@ -89,6 +96,7 @@ class ParenType(SType):
     def from_token(token):
         return ParenType(token, token)
 
+
 class BoolType(SType):
     type_name = "bool"
     def unbox_bool(self):
@@ -102,6 +110,7 @@ class BoolType(SType):
     @staticmethod
     def from_token(token):
         return BoolType(bool(token), token)
+
 
 class NumType(BoolType):
     type_name = "num"
@@ -127,6 +136,7 @@ class NumType(BoolType):
     def from_token(token):
         return NumType(NumType.cast_value(token), token)
 
+
 class SymType(SType):
     type_name = "sym"
     @staticmethod
@@ -140,7 +150,9 @@ class SymType(SType):
     def from_token(token):
         return SymType(token, token)
 
+
 ####
+
 
 class BasicTypeResolver(object):
     types = [
@@ -164,6 +176,8 @@ class BasicTypeResolver(object):
 
 
 #### NUMERIC / LOGICAL OPERATIONS ####
+
+
 def op_add(a, b): return NumType(a.unbox_num()+b.unbox_num())
 def op_sub(a, b): return NumType(a.unbox_num()-b.unbox_num())
 def op_mul(a, b): return NumType(a.unbox_num()*b.unbox_num())
@@ -180,8 +194,9 @@ def op_gte(a, b): return BoolType(a.unbox_bool() >= b.unbox_bool())
 def op_lte(a, b): return BoolType(a.unbox_bool() <= b.unbox_bool())
 def op_neq(a, b): return BoolType(a.unbox_bool() != b.unbox_bool())
 
-class BasicSymbolResolver(object):
-    symbols = {
+
+class BasicFunctionResolver(object):
+    builtin_functions = {
         "+"     : NaryFunction(NumType, [NumType, NumType], op_add),
         "-"     : NaryFunction(NumType, [NumType, NumType], op_sub),
         "*"     : NaryFunction(NumType, [NumType, NumType], op_mul),
@@ -198,12 +213,29 @@ class BasicSymbolResolver(object):
         "<="    : NaryFunction(BoolType, [BoolType, BoolType], op_lte),
         "!="    : NaryFunction(BoolType, [BoolType, BoolType], op_neq)
     }
+    
+    def get_function(self, token):
+        return self.builtin_functions[token]
+    
+
+class CustomFunctionResolver(BasicFunctionResolver):
+    custom_functions = {}
+
+    def get_function(self, token):
+        try:
+            return BasicFunctionResolver.get_function(self, token)
+        except KeyError:
+            return self.custom_functions[token]
+
+    def set_function(self, token, function):
+        self.custom_functions[token] = function 
+
+
+class Context(CustomFunctionResolver, BasicTypeResolver): pass
+
 
 ####
 
-class Context(BasicSymbolResolver, BasicTypeResolver): pass
-
-####
 
 class ASTNode(object):
     def __init__(self, stype):
@@ -235,21 +267,21 @@ class ASTNode(object):
 
     def evaluate(self, context, depth=0):
         if type(self.stype) == SymType:
-            symbol = context.symbols[self.stype.value]
+            function = context.get_function(self.stype.value)
             ec_iter = (child.evaluate(context, depth+1) for child in self.children)
-            new_stype = symbol.apply(ec_iter)
+            new_stype = function.apply(ec_iter)
             new_node = ASTNode(new_stype)
-            print "*"*(depth+1)
+            print self.stype.token, "*"*(depth+1)
             print self
-            print "*"*(depth+1)
+            print self.stype.token, "*"*(depth+1)
             print new_node
-            print "*"*(depth+1)
+            print self.stype.token, "*"*(depth+1)
             return new_node
         else:
             return self
 
     @staticmethod
-    def from_stream(context, tokens, depth=0):
+    def from_stream(context, tokens):
         titer = iter(tokens)
         root = None
         while True:
@@ -272,7 +304,7 @@ class ASTNode(object):
             else:
                 if type(stype) == ParenType:
                     if stype.is_open_paren():
-                        child = ASTNode.from_stream(context, titer, depth+1)
+                        child = ASTNode.from_stream(context, titer)
                         root.children.append(child)
                     else:
                         return root
@@ -280,17 +312,13 @@ class ASTNode(object):
                     node = ASTNode(stype)
                     root.children.append(node)
 
-        raise Exception("Unexpected end of tokens")
-
 
 def execute(program):
-    tokens = list(tokenize(program))
-    print "tokens ", tokens
-    print "is valid? ", is_valid(tokens)
+    tokens = tokenize(program)
     context = Context()
     tree = ASTNode.from_stream(context, tokens)
-    print tree
     return tree.evaluate(context)
+
 
 if __name__ == "__main__":
     import sys
@@ -312,5 +340,6 @@ if __name__ == "__main__":
         sys.exit(-1)
 
     program = program.strip()
-    ret_val = execute(program)
-    print "=== "+str(ret_val)
+    ret_node = execute(program)
+    print "==="
+    print ret_node
