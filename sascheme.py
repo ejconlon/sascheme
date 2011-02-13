@@ -184,6 +184,7 @@ class SymSType(BoxedSType):
     name = "sym"
 
 class StreamSType(SType):
+    name = "stream"
     def __init__(self, stream):
         self.stream = list(stream)
         SType.__init__(self, " ".join(self.stream))
@@ -316,12 +317,51 @@ class ASTNode(object):
             print new_node
             print self.stype.token, "*"*(depth+1)
             return new_node
+        elif type(self.stype) == StreamSType:
+            print "STREAM", "*"*(depth+1)
+            print self
+            print "STREAM", "*"*(depth+1)
+            new_node = ASTNode.from_stream(context, self.stype.stream)
+            print new_node
+            print "STREAM", "*"*(depth+1)
+            return new_node.evaluate(context, depth)
         else:
             return self
 
     @staticmethod
-    def from_stream(context, tokens, force_eval=False, depth=1):
+    def from_stream_lazy(tokens):
         titer = iter(tokens)
+        depth = 0
+        buf = []
+
+        while True:
+            try:
+                token = titer.next()
+            except StopIteration:
+                raise Exception("Unexpected end of tokens")
+
+            if (ParenSType.can_box_token(token)):
+                stype = ParenSType.from_token(token)
+                
+                if len(buf) == 0 and depth == 0 and not stype.is_open_paren():
+                    raise Exception("No opening paren")
+
+                if stype.is_open_paren():
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        buf.append(token)
+                        return ASTNode(StreamSType(buf))
+                    elif depth < 0:
+                        raise Exception("Too many closing parens")
+
+            buf.append(token)
+
+    @staticmethod
+    def from_stream(context, tokens):
+        titer = iter(tokens)
+        depth = 0
         root = None
         while True:
             try:
@@ -330,6 +370,11 @@ class ASTNode(object):
                 raise Exception("Unexpected end of tokens")
 
             stype = context.box_token(token)
+            
+            if root is None and type(stype) == ParenSType and \
+               not stype.is_open_paren() and depth == 0:
+                raise Exception("No opening paren")
+
             if root is None:
                 if type(stype) == ParenSType:
                     if stype.is_open_paren():
@@ -347,7 +392,7 @@ class ASTNode(object):
             else:
                 if type(stype) == ParenSType:
                     if stype.is_open_paren():
-                        child = ASTNode.from_stream(context, titer)
+                        child = ASTNode.from_stream_lazy(push_back("(", titer))
                         root.children.append(child)
                     else:
                         return root
@@ -355,6 +400,9 @@ class ASTNode(object):
                     node = ASTNode(stype)
                     root.children.append(node)
 
+def push_back(sym, stream):
+    yield sym
+    for s in stream: yield s
 
 def execute(program):
     tokens = tokenize(program)
