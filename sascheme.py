@@ -30,7 +30,7 @@ def is_balanced(tokens):
 def is_valid(tokens):
     return tokens[0]  == "(" and \
            tokens[-1] == ")" and \
-           len(tokens) > 2 and \
+           len(tokens) >= 2 and \
            is_balanced(tokens)
 
 
@@ -69,97 +69,119 @@ class Constant(Function):
 ####
 
 
+class MetaSType(type): pass
+
+class MetaBoxedSType(MetaSType):
+    def can_box_value(self, value):
+        raise Exception("OVERRIDE PLEASE")
+    def can_box_token(self, token):
+        raise Exception("OVERRIDE PLEASE")
+    def from_token(self, token):
+        raise Exception("OVERRIDE PLEASE")
+
 class SType(object): 
-    type_name = "type"
+    __metaclass__ = MetaSType
+    name = "type"
     def __init__(self, value, token=None):
         self.value = value
         self.token = token
     def __repr__(self):
         return self.__str__()
     def __str__(self):
-        return '<SType type_name="%s" value="%s" token="%s" />' % (self.type_name, self.value, self.token) 
+        s = '<SType name="%s" value="%s" ' % (self.name, self.value)
+        if self.token is not None:
+            s += 'token="%s" ' % (self.token) 
+        return s + '/>'
 
+class NoneSType(SType):
+    name = "none"
+    def __init__(self):
+        SType.__init__(self, None, None)
 
-class ParenType(SType):
-    type_name = "paren"
+class MetaParenSType(MetaBoxedSType):
+    def can_box_value(self, value):
+        return ParenSType.can_box_token(value)
+    def can_box_token(self, token):
+        return "(" == token or ")" == token
+    def from_token(self, token):
+        return ParenSType(token, token)
+
+class ParenSType(SType):
+    __metaclass__ = MetaParenSType
+    name = "paren"
     def is_open_paren(self):
         return "(" == self.value
     def is_close_paren(self):
         return ")" == self.value
-    @staticmethod
-    def can_box_value(value):
-        return PareType.can_box_token(value)
-    @staticmethod
-    def can_box_token(token):
-        return "(" == token or ")" == token
-    @staticmethod
-    def from_token(token):
-        return ParenType(token, token)
 
 
-class BoolType(SType):
-    type_name = "bool"
+class MetaBoolSType(MetaBoxedSType):
+    def can_box_value(self, value):
+        return True
+    def can_box_token(self, token):
+        return "True" == token or "False" == token
+    def from_token(self, token):
+        if token == "True":
+            value = True
+        elif token == "False":
+            value = False
+        else:
+            raise Exception("Invalid token: "+token)
+        return BoolSType(value, token)
+
+class BoolSType(SType):
+    __metaclass__ = MetaBoolSType
+    name = "bool"
     def unbox_bool(self):
         return bool(self.value)
-    @staticmethod
-    def can_box_value(value):
-        return True
-    @staticmethod
-    def can_box_token(token):
-        return "True" == token or "False" == token
-    @staticmethod
-    def from_token(token):
-        return BoolType(bool(token), token)
 
 
-class NumType(BoolType):
-    type_name = "num"
-    def unbox_num(self):
-        return self.value
-    @staticmethod
-    def cast_value(value):
+class MetaNumSType(MetaBoolSType):
+    def cast_value(self, value):
         try:
             return int(value)
         except ValueError:
             return float(value)
-    @staticmethod
-    def can_box_value(value):
+    def can_box_value(self, value):
         try:
-            NumType.cast_value(value)
+            self.cast_value(value)
             return True
         except ValueError:
             return False
-    @staticmethod
-    def can_box_token(token):
-        return NumType.can_box_value(token)
-    @staticmethod
-    def from_token(token):
-        return NumType(NumType.cast_value(token), token)
+    def can_box_token(self, token):
+        return self.can_box_value(token)
+    def from_token(self, token):
+        return NumSType(self.cast_value(token), token)
 
+class NumSType(BoolSType):
+    __metaclass__ = MetaNumSType
+    name = "num"
+    def unbox_num(self):
+        return self.value
 
-class SymType(SType):
-    type_name = "sym"
-    @staticmethod
-    def can_box_token(token):
-        return not BoolType.can_box_token(token) and \
-               not NumType.can_box_token(token)
-    @staticmethod
-    def can_box_value(value):
-        return SymType.can_box_token(value)
-    @staticmethod
-    def from_token(token):
-        return SymType(token, token)
+class MetaSymSType(MetaBoxedSType):
+    def can_box_token(self, token):
+        return not BoolSType.can_box_token(token) and \
+               not NumSType.can_box_token(token)
+    def can_box_value(self, value):
+        return self.can_box_token(value)
+    def from_token(self, token):
+        return SymSType(token, token)
+
+class SymSType(SType):
+    __metaclass__ = MetaSymSType
+    name = "sym"
 
 
 ####
 
 
-class BasicTypeResolver(object):
+class BasicTypeBoxer(object):
     types = [
-        ("paren", ParenType),
-        ("bool", BoolType),
-        ("num", NumType),
-        ("sym", SymType)
+        ("paren",   ParenSType),
+        ("bool",    BoolSType),
+        ("num",     NumSType),
+        ("sym",     SymSType),
     ]
 
     def box_token(self, token):
@@ -178,40 +200,40 @@ class BasicTypeResolver(object):
 #### NUMERIC / LOGICAL OPERATIONS ####
 
 
-def op_add(a, b): return NumType(a.unbox_num()+b.unbox_num())
-def op_sub(a, b): return NumType(a.unbox_num()-b.unbox_num())
-def op_mul(a, b): return NumType(a.unbox_num()*b.unbox_num())
-def op_div(a, b): return NumType(a.unbox_num()/b.unbox_num())
-def op_mod(a, b): return NumType(a.unbox_num()%b.unbox_num())
-def op_neg(a):    return NumType(-a.unbox_num())
-def op_not(a):    return BoolType(not a.unbox_bool())
-def op_and(a, b): return BoolType(a.unbox_bool() and b.unbox_bool())
-def op_or(a, b):  return BoolType(a.unbox_bool() or b.unbox_bool())
-def op_gt(a, b):  return BoolType(a.unbox_bool() > b.unbox_bool())
-def op_lt(a, b):  return BoolType(a.unbox_bool() < b.unbox_bool())
-def op_eq(a, b):  return BoolType(a.unbox_bool() == b.unbox_bool())
-def op_gte(a, b): return BoolType(a.unbox_bool() >= b.unbox_bool())
-def op_lte(a, b): return BoolType(a.unbox_bool() <= b.unbox_bool())
-def op_neq(a, b): return BoolType(a.unbox_bool() != b.unbox_bool())
+def op_add(a, b): return NumSType(a.unbox_num()+b.unbox_num())
+def op_sub(a, b): return NumSType(a.unbox_num()-b.unbox_num())
+def op_mul(a, b): return NumSType(a.unbox_num()*b.unbox_num())
+def op_div(a, b): return NumSType(a.unbox_num()/b.unbox_num())
+def op_mod(a, b): return NumSType(a.unbox_num()%b.unbox_num())
+def op_neg(a):    return NumSType(-a.unbox_num())
+def op_not(a):    return BoolSType(not a.unbox_bool())
+def op_and(a, b): return BoolSType(a.unbox_bool() and b.unbox_bool())
+def op_or(a, b):  return BoolSType(a.unbox_bool() or b.unbox_bool())
+def op_gt(a, b):  return BoolSType(a.unbox_num() > b.unbox_num())
+def op_lt(a, b):  return BoolSType(a.unbox_num() < b.unbox_num())
+def op_eq(a, b):  return BoolSType(a.value == b.value)
+def op_gte(a, b): return BoolSType(op_gt(a, b).unbox_bool() or op_eq(a, b).unbox_bool())
+def op_lte(a, b): return BoolSType(op_lt(a, b).unbox_bool() or op_eq(a, b).unbox_bool())
+def op_neq(a, b): return BoolSType(not op_eq(a, b).unbox_bool())
 
 
 class BasicFunctionResolver(object):
     builtin_functions = {
-        "+"     : NaryFunction(NumType, [NumType, NumType], op_add),
-        "-"     : NaryFunction(NumType, [NumType, NumType], op_sub),
-        "*"     : NaryFunction(NumType, [NumType, NumType], op_mul),
-        "/"     : NaryFunction(NumType, [NumType, NumType], op_div),
-        "%"     : NaryFunction(NumType, [NumType, NumType], op_mod),
-        "neg"   : NaryFunction(NumType, [NumType], op_neg),
-        "not"   : NaryFunction(BoolType, [BoolType, BoolType], op_not),
-        "and"   : NaryFunction(BoolType, [BoolType, BoolType], op_and),
-        "or"    : NaryFunction(BoolType, [BoolType, BoolType], op_or),
-        ">"     : NaryFunction(BoolType, [BoolType, BoolType], op_gt),
-        "<"     : NaryFunction(BoolType, [BoolType, BoolType], op_lt),
-        "=="    : NaryFunction(BoolType, [BoolType, BoolType], op_eq),
-        ">="    : NaryFunction(BoolType, [BoolType, BoolType], op_gte),
-        "<="    : NaryFunction(BoolType, [BoolType, BoolType], op_lte),
-        "!="    : NaryFunction(BoolType, [BoolType, BoolType], op_neq)
+        "+"     : NaryFunction(NumSType, [NumSType, NumSType], op_add),
+        "-"     : NaryFunction(NumSType, [NumSType, NumSType], op_sub),
+        "*"     : NaryFunction(NumSType, [NumSType, NumSType], op_mul),
+        "/"     : NaryFunction(NumSType, [NumSType, NumSType], op_div),
+        "%"     : NaryFunction(NumSType, [NumSType, NumSType], op_mod),
+        "neg"   : NaryFunction(NumSType, [NumSType], op_neg),
+        "not"   : NaryFunction(BoolSType, [BoolSType], op_not),
+        "and"   : NaryFunction(BoolSType, [BoolSType, BoolSType], op_and),
+        "or"    : NaryFunction(BoolSType, [BoolSType, BoolSType], op_or),
+        ">"     : NaryFunction(BoolSType, [NumSType, NumSType], op_gt),
+        "<"     : NaryFunction(BoolSType, [NumSType, NumSType], op_lt),
+        "=="    : NaryFunction(BoolSType, [SType, SType], op_eq),
+        ">="    : NaryFunction(BoolSType, [NumSType, NumSType], op_gte),
+        "<="    : NaryFunction(BoolSType, [NumSType, NumSType], op_lte),
+        "!="    : NaryFunction(BoolSType, [SType, SType], op_neq)
     }
     
     def get_function(self, token):
@@ -231,7 +253,7 @@ class CustomFunctionResolver(BasicFunctionResolver):
         self.custom_functions[token] = function 
 
 
-class Context(CustomFunctionResolver, BasicTypeResolver): pass
+class Context(CustomFunctionResolver, BasicTypeBoxer): pass
 
 
 ####
@@ -266,7 +288,7 @@ class ASTNode(object):
         return s
 
     def evaluate(self, context, depth=0):
-        if type(self.stype) == SymType:
+        if type(self.stype) == SymSType:
             function = context.get_function(self.stype.value)
             ec_iter = (child.evaluate(context, depth+1) for child in self.children)
             new_stype = function.apply(ec_iter)
@@ -281,28 +303,32 @@ class ASTNode(object):
             return self
 
     @staticmethod
-    def from_stream(context, tokens):
+    def from_stream(context, tokens, depth=1):
         titer = iter(tokens)
         root = None
         while True:
             try:
                 token = titer.next()
             except StopIteration:
-                raise Exception("Unexpedted end of tokens")
+                raise Exception("Unexpected end of tokens")
 
             stype = context.box_token(token)
             if root is None:
-                if type(stype) == ParenType:
+                if type(stype) == ParenSType:
                     if stype.is_open_paren():
+                        depth += 1
                         continue
                     else:
-                        raise Exception("Unexpected closing paren")
+                        depth -= 1
+                        if depth < 0:
+                            raise Exception("Too many closing parens")
+                        return ASTNode(NoneSType()) 
                 else:
                     node = ASTNode(stype)
                     root = node
                     continue
             else:
-                if type(stype) == ParenType:
+                if type(stype) == ParenSType:
                     if stype.is_open_paren():
                         child = ASTNode.from_stream(context, titer)
                         root.children.append(child)
