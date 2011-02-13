@@ -30,87 +30,186 @@ def is_balanced(tokens):
 def is_valid(tokens):
     return tokens[0]  == "(" and \
            tokens[-1] == ")" and \
-           is_balanced(tokens) and \
-           len(tokens) > 2
+           len(tokens) > 2 and \
+           is_balanced(tokens)
 
-#######
-def func_mul(az): 
-    it = iter(az)
-    acc = float(it.next().token)
-    for a in it:
-        acc *= float(a.token)
-    return acc
+####
 
-#def func_div(a, b): return a/b
-def func_add(az):
-    it = iter(az)
-    acc = float(it.next().token)
-    for a in it:
-        acc += float(a.token)
-    return acc
+class Function(object):
+    def __init__(self, return_type, argument_types):
+        self.return_type = return_type
+        self.argument_types = argument_types
 
-#def func_sub(a, b): return a-b
-#def func_neg(a): return -a
-#def func_mod(a, b): return a%b
-#def func_not(a): return not a
-#def func_and(a, b): return a and b
-#def func_or(a, b): return a or b
-#def func_gt(a, b): return a > b
-#def func_lt(a, b): return a < b
-#def func_eq(a, b): return a == b
-#def func_gte(a, b): return a >= b
-#def func_lte(a, b): return a <= b
-#def func_neq(a, b): return a != b
+    def arity(self):
+        return len(self.argument_types)
 
-########
+class NaryFunction(Function):
+    def __init__(self, return_type, argument_types, operation):
+        Function.__init__(self, return_type, argument_types)
+        self.operation = operation
 
-class Context(object):
-    types = set(["func", "num", "bool", "(", ")", "?"])
-    func_map = {
-        "*" : func_mul,
-#        "/" : func_div,
-        "+" : func_add,
-#        "-" : func_sub,
-#        "neg" : func_neg,
-#        "%" : func_mod,
-#        "not" : func_not,
-#        "and" : func_and,
-#        "or" : func_or,
-#        ">" : func_gt,
-#        "<" : func_lt,
-#        "==" : func_eq,
-#        ">=" : func_gte,
-#        "<=" : func_lte,
-#        "!=" : func_neq
+    def apply(self, xs):
+        xs = iter(xs)
+        args = [xs.next().stype for i in xrange(self.arity())]
+        return self.operation(*args)
+
+class Constant(Function):
+    def __init__(return_type, value):
+        Function.__init__(self, return_type, [])
+        this.value = value
+
+    def apply(self, xs=None):
+        return this.value
+
+####
+
+class SType(object): 
+    type_name = "type"
+    def __init__(self, value, token=None):
+        self.value = value
+        self.token = token
+    def __repr__(self):
+        return self.__str__()
+    def __str__(self):
+        return '<SType type_name="%s" value="%s" token="%s" />' % (self.type_name, self.value, self.token) 
+
+class ParenType(SType):
+    type_name = "paren"
+    def is_open_paren(self):
+        return "(" == self.value
+    def is_close_paren(self):
+        return ")" == self.value
+    @staticmethod
+    def can_box_value(value):
+        return PareType.can_box_token(value)
+    @staticmethod
+    def can_box_token(token):
+        return "(" == token or ")" == token
+    @staticmethod
+    def from_token(token):
+        return ParenType(token, token)
+
+class BoolType(SType):
+    type_name = "bool"
+    def unbox_bool(self):
+        return bool(self.value)
+    @staticmethod
+    def can_box_value(value):
+        return True
+    @staticmethod
+    def can_box_token(token):
+        return "True" == token or "False" == token
+    @staticmethod
+    def from_token(token):
+        return BoolType(bool(token), token)
+
+class NumType(BoolType):
+    type_name = "num"
+    def unbox_num(self):
+        return self.value
+    @staticmethod
+    def cast_value(value):
+        try:
+            return int(value)
+        except ValueError:
+            return float(value)
+    @staticmethod
+    def can_box_value(value):
+        try:
+            NumType.cast_value(value)
+            return True
+        except ValueError:
+            return False
+    @staticmethod
+    def can_box_token(token):
+        return NumType.can_box_value(token)
+    @staticmethod
+    def from_token(token):
+        return NumType(NumType.cast_value(token), token)
+
+class SymType(SType):
+    type_name = "sym"
+    @staticmethod
+    def can_box_token(token):
+        return not BoolType.can_box_token(token) and \
+               not NumType.can_box_token(token)
+    @staticmethod
+    def can_box_value(value):
+        return SymType.can_box_token(value)
+    @staticmethod
+    def from_token(token):
+        return SymType(token, token)
+
+####
+
+class BasicTypeResolver(object):
+    types = [
+        ("paren", ParenType),
+        ("bool", BoolType),
+        ("num", NumType),
+        ("sym", SymType)
+    ]
+
+    def box_token(self, token):
+        for tname, tclass in self.types:
+            if tclass.can_box_token(token):
+                return tclass.from_token(token)
+        raise Exception("Could not cast token: "+str(token))
+    
+    def box_value(self, value):
+        for tname, tclass in self.types:
+            if tclass.can_box_value(value):
+                return tclass(value)
+        raise Exception("Could not cast value: "+str(value))
+
+
+#### NUMERIC / LOGICAL OPERATIONS ####
+def op_add(a, b): return NumType(a.unbox_num()+b.unbox_num())
+def op_sub(a, b): return NumType(a.unbox_num()-b.unbox_num())
+def op_mul(a, b): return NumType(a.unbox_num()*b.unbox_num())
+def op_div(a, b): return NumType(a.unbox_num()/b.unbox_num())
+def op_mod(a, b): return NumType(a.unbox_num()%b.unbox_num())
+def op_neg(a):    return NumType(-a.unbox_num())
+def op_not(a):    return BoolType(not a.unbox_bool())
+def op_and(a, b): return BoolType(a.unbox_bool() and b.unbox_bool())
+def op_or(a, b):  return BoolType(a.unbox_bool() or b.unbox_bool())
+def op_gt(a, b):  return BoolType(a.unbox_bool() > b.unbox_bool())
+def op_lt(a, b):  return BoolType(a.unbox_bool() < b.unbox_bool())
+def op_eq(a, b):  return BoolType(a.unbox_bool() == b.unbox_bool())
+def op_gte(a, b): return BoolType(a.unbox_bool() >= b.unbox_bool())
+def op_lte(a, b): return BoolType(a.unbox_bool() <= b.unbox_bool())
+def op_neq(a, b): return BoolType(a.unbox_bool() != b.unbox_bool())
+
+class BasicSymbolResolver(object):
+    symbols = {
+        "+"     : NaryFunction(NumType, [NumType, NumType], op_add),
+        "-"     : NaryFunction(NumType, [NumType, NumType], op_sub),
+        "*"     : NaryFunction(NumType, [NumType, NumType], op_mul),
+        "/"     : NaryFunction(NumType, [NumType, NumType], op_div),
+        "%"     : NaryFunction(NumType, [NumType, NumType], op_mod),
+        "neg"   : NaryFunction(NumType, [NumType], op_neg),
+        "not"   : NaryFunction(BoolType, [BoolType, BoolType], op_not),
+        "and"   : NaryFunction(BoolType, [BoolType, BoolType], op_and),
+        "or"    : NaryFunction(BoolType, [BoolType, BoolType], op_or),
+        ">"     : NaryFunction(BoolType, [BoolType, BoolType], op_gt),
+        "<"     : NaryFunction(BoolType, [BoolType, BoolType], op_lt),
+        "=="    : NaryFunction(BoolType, [BoolType, BoolType], op_eq),
+        ">="    : NaryFunction(BoolType, [BoolType, BoolType], op_gte),
+        "<="    : NaryFunction(BoolType, [BoolType, BoolType], op_lte),
+        "!="    : NaryFunction(BoolType, [BoolType, BoolType], op_neq)
     }
 
-    def get_type(self, token):
-        if token == "(" or token == ")":
-            return token
-        elif token == "True" or token == "False":
-            return "bool"
-        elif token in self.func_map.keys():
-            return "func"
-        else:
-            try:
-                num = float(token)
-                return "num"
-            except ValueError:
-                return "?"
+####
 
-    def get_mapped_func(self, func):
-        return self.func_map[func]
+class Context(BasicSymbolResolver, BasicTypeResolver): pass
+
+####
 
 class ASTNode(object):
-    def __init__(self, context, token):
-        self.token = token
-        self.token_type = context.get_type(token)
+    def __init__(self, stype):
+        self.stype = stype
         self.parent = None
         self.children = []
-
-    def is_well_typed(self):
-        return self.token_type != "?" and \
-               all(child.is_well_typed() for child in self.children)
 
     def __repr__(self):
         return self.__str__()
@@ -118,58 +217,70 @@ class ASTNode(object):
         return self.nodestr()
 
     def nodestr(self, depth=0):
-        start = '<ASTNode token="%s" type="%s">' % (self.token, self.token_type)
+        start = '<ASTNode>' 
+        type_str = str(self.stype)
         end = '</ASTNode>'
-        if len(self.children) == 0:
-            return "\t"*depth+start + end
-        else:
-            s = "\t"*depth+start+"\n"
-            child_strs = (child.nodestr(depth+1) for child in self.children)
-            for line in child_strs:
-                s += ("\t"*(depth))+line+"\n"
-            s += "\t"*depth+end
-            return s
+        tabs = lambda t: "\t"*t
+        s =  tabs(depth)+start+"\n"
+        s += tabs(depth+1)+type_str+"\n"
+        child_strs = [child.nodestr(depth+2) for child in self.children]
+        if len(child_strs) > 0:
+            s += tabs(depth+1)+"<ASTNode.children>\n"
+        for line in child_strs:
+            s += line+"\n"
+        if len(child_strs) > 0:
+            s += tabs(depth+1)+"</ASTNode.children>\n"
+        s += tabs(depth)+end
+        return s
 
-    def evaluate(self, context):
-        if self.token_type == "func":
-            func = context.get_mapped_func(self.token)
-            ec_iter = (child.evaluate(context) for child in self.children)
-            new_token = func(ec_iter)
-            return ASTNode(context, new_token)
+    def evaluate(self, context, depth=0):
+        if type(self.stype) == SymType:
+            symbol = context.symbols[self.stype.value]
+            ec_iter = (child.evaluate(context, depth+1) for child in self.children)
+            new_stype = symbol.apply(ec_iter)
+            new_node = ASTNode(new_stype)
+            print "*"*(depth+1)
+            print self
+            print "*"*(depth+1)
+            print new_node
+            print "*"*(depth+1)
+            return new_node
         else:
             return self
 
     @staticmethod
-    def from_stream(context, tokens):
+    def from_stream(context, tokens, depth=0):
         titer = iter(tokens)
-        depth = 0
         root = None
         while True:
             try:
                 token = titer.next()
             except StopIteration:
-                raise Exception("End of tokens - must be unbalanced")
+                raise Exception("Unexpedted end of tokens")
 
-            if root is None and token == "(":
-                continue
-
-            node = ASTNode(context, token)
-            if root is None and node.token_type != "func":
-                raise Exception("invalid syntax - no func")
-            elif root is None and node.token_type == "func": 
-                root = node
-                continue
-
-            else: # root is not None
-                if node.token_type == "(":
-                    child = ASTNode.from_stream(context, titer)
-                    root.children.append(child)
-                elif node.token_type == ")":
-                    return root
+            stype = context.box_token(token)
+            if root is None:
+                if type(stype) == ParenType:
+                    if stype.is_open_paren():
+                        continue
+                    else:
+                        raise Exception("Unexpected closing paren")
                 else:
+                    node = ASTNode(stype)
+                    root = node
+                    continue
+            else:
+                if type(stype) == ParenType:
+                    if stype.is_open_paren():
+                        child = ASTNode.from_stream(context, titer, depth+1)
+                        root.children.append(child)
+                    else:
+                        return root
+                else:
+                    node = ASTNode(stype)
                     root.children.append(node)
 
-        raise Exception("no ending paren")
+        raise Exception("Unexpected end of tokens")
 
 
 def execute(program):
