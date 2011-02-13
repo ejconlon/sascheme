@@ -71,6 +71,19 @@ class Constant(Function):
 
 class MetaSType(type): pass
 
+class SType(object): 
+    __metaclass__ = MetaSType
+    name = "type"
+    def __init__(self, token=None):
+        self.token = token
+    def __repr__(self):
+        return self.__str__()
+    def __str__(self):
+        s = '<'+self.__class__.__name__+' name="%s" ' % (self.name)
+        if self.token is not None:
+            s += 'token="%s" ' % (self.token) 
+        return s + '/>'
+
 class MetaBoxedSType(MetaSType):
     def can_box_value(self, value):
         raise Exception("OVERRIDE PLEASE")
@@ -79,24 +92,22 @@ class MetaBoxedSType(MetaSType):
     def from_token(self, token):
         raise Exception("OVERRIDE PLEASE")
 
-class SType(object): 
-    __metaclass__ = MetaSType
-    name = "type"
+class BoxedSType(SType):
+    __metaclass__ = MetaBoxedSType
+    name = "boxed"
     def __init__(self, value, token=None):
+        SType.__init__(self, token)
         self.value = value
-        self.token = token
-    def __repr__(self):
-        return self.__str__()
     def __str__(self):
-        s = '<SType name="%s" value="%s" ' % (self.name, self.value)
+        s = '<'+self.__class__.__name__+' name="%s" value="%s" ' % (self.name, self.value)
         if self.token is not None:
             s += 'token="%s" ' % (self.token) 
         return s + '/>'
 
-class NoneSType(SType):
+class NoneSType(BoxedSType):
     name = "none"
     def __init__(self):
-        SType.__init__(self, None, None)
+        BoxedSType.__init__(self, None, None)
 
 class MetaParenSType(MetaBoxedSType):
     def can_box_value(self, value):
@@ -106,7 +117,7 @@ class MetaParenSType(MetaBoxedSType):
     def from_token(self, token):
         return ParenSType(token, token)
 
-class ParenSType(SType):
+class ParenSType(BoxedSType):
     __metaclass__ = MetaParenSType
     name = "paren"
     def is_open_paren(self):
@@ -129,7 +140,7 @@ class MetaBoolSType(MetaBoxedSType):
             raise Exception("Invalid token: "+token)
         return BoolSType(value, token)
 
-class BoolSType(SType):
+class BoolSType(BoxedSType):
     __metaclass__ = MetaBoolSType
     name = "bool"
     def unbox_bool(self):
@@ -168,10 +179,16 @@ class MetaSymSType(MetaBoxedSType):
     def from_token(self, token):
         return SymSType(token, token)
 
-class SymSType(SType):
+class SymSType(BoxedSType):
     __metaclass__ = MetaSymSType
     name = "sym"
 
+class StreamSType(SType):
+    def __init__(self, stream):
+        self.stream = list(stream)
+        SType.__init__(self, " ".join(self.stream))
+    def to_ast_node(self, context):
+        return ASTNode.from_stream(context, self.stream, force_eval=True)
 
 ####
 
@@ -212,9 +229,9 @@ def op_or(a, b):  return BoolSType(a.unbox_bool() or b.unbox_bool())
 def op_gt(a, b):  return BoolSType(a.unbox_num() > b.unbox_num())
 def op_lt(a, b):  return BoolSType(a.unbox_num() < b.unbox_num())
 def op_eq(a, b):  return BoolSType(a.value == b.value)
-def op_gte(a, b): return BoolSType(op_gt(a, b).unbox_bool() or op_eq(a, b).unbox_bool())
-def op_lte(a, b): return BoolSType(op_lt(a, b).unbox_bool() or op_eq(a, b).unbox_bool())
-def op_neq(a, b): return BoolSType(not op_eq(a, b).unbox_bool())
+def op_gte(a, b): return op_or(op_gt(a,b), op_eq(a,b))
+def op_lte(a, b): return op_or(op_lt(a,b), op_eq(a,b))
+def op_neq(a, b): return op_not(op_eq(a,b))
 
 
 class BasicFunctionResolver(object):
@@ -303,7 +320,7 @@ class ASTNode(object):
             return self
 
     @staticmethod
-    def from_stream(context, tokens, depth=1):
+    def from_stream(context, tokens, force_eval=False, depth=1):
         titer = iter(tokens)
         root = None
         while True:
