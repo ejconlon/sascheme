@@ -322,7 +322,7 @@ def execute(program):
 
 if __name__ == "__main__":
     import sys
-    use_string = "USE: ./lisp.py (-f file | -c string)" 
+    use_string = "USE: sascheme.py (-f file | -c string)" 
     if len(sys.argv) < 3:
         print use_string
         sys.exit(-1)
