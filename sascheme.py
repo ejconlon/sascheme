@@ -58,12 +58,12 @@ class NaryFunction(Function):
 
 
 class Constant(Function):
-    def __init__(return_type, value):
+    def __init__(self, return_type, value):
         Function.__init__(self, return_type, [])
-        this.value = value
+        self.value = value
 
     def apply(self, xs=None):
-        return this.value
+        return self.value
 
 
 ####
@@ -130,11 +130,11 @@ class MetaBoolSType(MetaBoxedSType):
     def can_box_value(self, value):
         return True
     def can_box_token(self, token):
-        return "True" == token or "False" == token
+        return "#t" == token or "#f" == token
     def from_token(self, token):
-        if token == "True":
+        if token == "#t":
             value = True
-        elif token == "False":
+        elif token == "#f":
             value = False
         else:
             raise Exception("Invalid token: "+token)
@@ -143,6 +143,13 @@ class MetaBoolSType(MetaBoxedSType):
 class BoolSType(BoxedSType):
     __metaclass__ = MetaBoolSType
     name = "bool"
+    def __init__(self, value, token=None):
+        if token is None:
+            if value:
+                token = "#t"
+            else:
+                token = "#f"
+        BoxedSType.__init__(self, value, token)
     def unbox_bool(self):
         return bool(self.value)
 
@@ -164,9 +171,15 @@ class MetaNumSType(MetaBoolSType):
     def from_token(self, token):
         return NumSType(self.cast_value(token), token)
 
-class NumSType(BoolSType):
+class NumSType(BoxedSType):
     __metaclass__ = MetaNumSType
     name = "num"
+    def __init__(self, value, token=None):
+        if token is None:
+            token = str(value)
+        BoxedSType.__init__(self, value, token)
+    def unbox_bool(self):
+        return bool(self.value)
     def unbox_num(self):
         return self.value
 
@@ -340,7 +353,7 @@ class ASTNode(object):
             except StopIteration:
                 raise Exception("Unexpected end of tokens")
 
-            if (ParenSType.can_box_token(token)):
+            if ParenSType.can_box_token(token):
                 stype = ParenSType.from_token(token)
                 
                 if len(buf) == 0 and depth == 0 and not stype.is_open_paren():
