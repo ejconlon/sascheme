@@ -41,7 +41,6 @@ class Function(object):
     def __init__(self, return_type, argument_types):
         self.return_type = return_type
         self.argument_types = argument_types
-
     def arity(self):
         return len(self.argument_types)
 
@@ -104,10 +103,10 @@ class BoxedSType(SType):
             s += 'token="%s" ' % (self.token) 
         return s + '/>'
 
-class NoneSType(BoxedSType):
-    name = "none"
-    def __init__(self):
-        BoxedSType.__init__(self, None, None)
+#class NoneSType(BoxedSType):
+#    name = "none"
+#    def __init__(self):
+#        BoxedSType.__init__(self, None, None)
 
 class MetaParenSType(MetaBoxedSType):
     def can_box_value(self, value):
@@ -183,18 +182,18 @@ class NumSType(BoxedSType):
     def unbox_num(self):
         return self.value
 
-class MetaSymSType(MetaBoxedSType):
+class MetaIdentSType(MetaBoxedSType):
     def can_box_token(self, token):
         return not BoolSType.can_box_token(token) and \
                not NumSType.can_box_token(token)
     def can_box_value(self, value):
         return self.can_box_token(value)
     def from_token(self, token):
-        return SymSType(token, token)
+        return IdentSType(token, token)
 
-class SymSType(BoxedSType):
-    __metaclass__ = MetaSymSType
-    name = "sym"
+class IdentSType(BoxedSType):
+    __metaclass__ = MetaIdentSType
+    name = "ident"
 
 class StreamSType(SType):
     name = "stream"
@@ -202,7 +201,12 @@ class StreamSType(SType):
         self.stream = list(stream)
         SType.__init__(self, " ".join(self.stream))
     def to_ast_node(self, context):
-        return ASTNode.from_stream(context, self.stream, force_eval=True)
+        return ASTNode.from_stream(context, self.stream)
+
+class ListSType(SType):
+    name = "list"
+    def __init__(self):
+        SType.__init__(self)
 
 ####
 
@@ -212,7 +216,7 @@ class BasicTypeBoxer(object):
         ("paren",   ParenSType),
         ("bool",    BoolSType),
         ("num",     NumSType),
-        ("sym",     SymSType),
+        ("ident",     IdentSType),
     ]
 
     def box_token(self, token):
@@ -319,17 +323,22 @@ class ASTNode(object):
         return s
 
     def evaluate(self, context, depth=0):
-        if type(self.stype) == SymSType:
-            function = context.get_function(self.stype.value)
-            ec_iter = (child.evaluate(context, depth+1) for child in self.children)
-            new_stype = function.apply(ec_iter)
-            new_node = ASTNode(new_stype)
-            print self.stype.token, "*"*(depth+1)
-            print self
-            print self.stype.token, "*"*(depth+1)
-            print new_node
-            print self.stype.token, "*"*(depth+1)
-            return new_node
+        if type(self.stype) == ListSType:
+            if len(self.children) > 0:
+                first_child = self.children[0]
+                if type(first_child.stype) == StreamSType:
+                    first_child = first_child.evaluate(context, depth+1)
+                if type(first_child.stype) == IdentSType:
+                    function = context.get_function(first_child.stype.value)
+                    ec_iter = (child.evaluate(context, depth+1) for child in self.children[1:])
+                    new_stype = function.apply(ec_iter)
+                    new_node = ASTNode(new_stype)
+                    print first_child.stype.token, "*"*(depth+1)
+                    print self
+                    print first_child.stype.token, "*"*(depth+1)
+                    print new_node
+                    print first_child.stype.token, "*"*(depth+1)
+                    return new_node
         elif type(self.stype) == StreamSType:
             print "STREAM", "*"*(depth+1)
             print self
@@ -338,8 +347,7 @@ class ASTNode(object):
             print new_node
             print "STREAM", "*"*(depth+1)
             return new_node.evaluate(context, depth)
-        else:
-            return self
+        return self
 
     @staticmethod
     def from_stream_lazy(tokens):
@@ -374,7 +382,6 @@ class ASTNode(object):
     @staticmethod
     def from_stream(context, tokens):
         titer = iter(tokens)
-        depth = 0
         root = None
         while True:
             try:
@@ -383,38 +390,32 @@ class ASTNode(object):
                 raise Exception("Unexpected end of tokens")
 
             stype = context.box_token(token)
-            
+
             if root is None and type(stype) == ParenSType and \
-               not stype.is_open_paren() and depth == 0:
+               not stype.is_open_paren():
                 raise Exception("No opening paren")
 
             if root is None:
-                if type(stype) == ParenSType:
-                    if stype.is_open_paren():
-                        depth += 1
-                        continue
-                    else:
-                        depth -= 1
-                        if depth < 0:
-                            raise Exception("Too many closing parens")
-                        return ASTNode(NoneSType()) 
-                else:
-                    node = ASTNode(stype)
-                    root = node
-                    continue
+                # we raise exception above if the first token
+                # is not an open paren
+                root = ASTNode(ListSType())
+                continue
             else:
                 if type(stype) == ParenSType:
                     if stype.is_open_paren():
+                        # open paren we make a lazy child
+                        # and consume up to and including its close paren
                         child = ASTNode.from_stream_lazy(push_back("(", titer))
                         root.children.append(child)
                     else:
+                        # close paren closes this element
                         return root
                 else:
                     node = ASTNode(stype)
                     root.children.append(node)
 
-def push_back(sym, stream):
-    yield sym
+def push_back(tok, stream):
+    yield tok
     for s in stream: yield s
 
 def execute(program):
