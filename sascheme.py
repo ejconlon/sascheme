@@ -48,14 +48,21 @@ class Function(object):
     def evaluate(self, context, nodes):
         raise Exception("OVERRIDE PLEASE")
 
-class LambdaFunction(Function):
+class ConstantFunction(Function):
     def __init__(self, return_stype, node_value):
         Function.__init__(self, return_stype)
         self.node_value = node_value
     def evaluate(self, context, nodes):
         return self.node_value.evaluate(context, nodes)
 
-# lifts an stype* -> stype function to astnode -> stype
+class LambdaFunction(ConstantFunction):
+    def __init__(self, return_stype, node_value, bindings):
+        ConstantFunction.__init__(self, return_stype, node_value)
+        self.bindings = bindings
+    def arity(self):
+        return -1 # make arity checks fail
+
+# lifts an stype* -> stype function to astnode* -> stype
 class NaryFunction(Function):
     def __init__(self, return_type, argument_types, operation):
         Function.__init__(self, return_type)
@@ -300,15 +307,28 @@ class CustomFunctionResolver(BasicFunctionResolver, Function):
     def __init__(self):
         BasicFunctionResolver.__init__(self)
         Function.__init__(self, ListSType) 
-        self.argument_types = [IdentSType, StreamSType]
         self.custom_functions = {}
         self.func_name = "define"
 
+    def arity(self):
+        return 2
+
     def evaluate(self, context, nodes):
         nodes = iter(nodes)
-        ident = nodes.next()
-        node = nodes.next()
-        self.custom_functions[ident.stype.token] = LambdaFunction(node.stype.__class__, node)
+        from_node = nodes.next()
+        to_node = nodes.next()
+        if type(from_node.stype) == IdentSType:
+            self.custom_functions[from_node.stype.token] = \
+                ConstantFunction(IdentSType, to_node)
+        elif type(from_node.stype) == StreamSType:
+            token = from_node.stype.stream[1]
+            bindings = from_node.stype.stream[1:-1]
+            if token == ")":
+                raise Exception("Invalid define pattern in to: "+str(from_node))
+            else:
+                self.custom_functions[token] = LambdaFunction(IdentSType, to_node, bindings)
+        else:
+            raise Exception("Invalid define pattern in from: "+str(from_node))
         return ListSType()
 
     def get_function(self, token):
@@ -376,30 +396,24 @@ class ASTNode(object):
 
     def evaluate(self, context, depth=0):
         if type(self.stype) == ListSType:
-            if len(self.children) > 0:
+            num_children = len(self.children)
+            if num_children > 0:
                 first_child = self.children[0]
                 # evaluate first child from stream
                 if type(first_child.stype) == StreamSType:
                     first_child = first_child.evaluate(context, depth+1)
-                # if is identifier type, then do function applicaiton
+                # if is identifier type, then do function application
                 if type(first_child.stype) == IdentSType:
-                    function = context.get_function(first_child.stype.value)
-                    new_stype = function.evaluate(context, self.children[1:])
-                    new_node = ASTNode(new_stype)
-                    ASTNode.print_change(first_child.stype.token, depth, self, new_node)
-                    return new_node
-                # else return a list node with list type info for children
-                #else:
-                #    ec_iter = (child.evaluate(context, depth+1) for child in self.children)
-                #    new_stype = ListSType((child.stype for child in ec_iter))
-                #    new_node = ASTNode(new_stype)
-                #    new_node.children = self.children
-                #    return new_node
+                    function = context.get_function(first_child.stype.token)
+                    if function.arity() == num_children-1:
+                        new_stype = function.evaluate(context, self.children[1:])
+                        new_node = ASTNode(new_stype)
+                        ASTNode.print_change(first_child.stype.token, depth, self, new_node)
+                        return new_node
         elif type(self.stype) == StreamSType:
             new_node = ASTNode.from_stream(context, self.stype.stream)
             ASTNode.print_change("STREAM", depth, self, new_node)
             return new_node.evaluate(context, depth)
-        # not a stream or list to reify or function application?
         return self
 
     @staticmethod
