@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+import collections
+import itertools
+
 def tokenize(stream):
     last = []
     for c in stream:
@@ -427,7 +430,7 @@ class ASTNode(object):
                     if stype.is_open_paren():
                         # open paren we make a lazy child
                         # and consume up to and including its close paren
-                        child = ASTNode.from_stream_lazy(push_back("(", titer))
+                        child = ASTNode.from_stream_lazy(itertools.chain(["("], titer))
                         root.children.append(child)
                     else:
                         # close paren closes this element
@@ -440,12 +443,48 @@ def push_back(tok, stream):
     yield tok
     for s in stream: yield s
 
-def execute(program):
-    tokens = tokenize(program)
-    context = Context()
-    tree = ASTNode.from_stream(context, tokens)
-    return tree.evaluate(context)
 
+class LookAheadIterator(collections.Iterator):
+    def __init__(self, wrapped):
+        self._wrapped = iter(wrapped)
+        self._need_to_advance = True
+        self._has_next = False
+        self._cache = None
+
+    def has_next(self):
+        if self._need_to_advance:
+            self._advance()
+        return self._has_next
+
+    def _advance(self):
+        try:
+            self._cache = self._wrapped.next()
+            self._has_next = True
+        except StopIteration:
+            self._has_next = False
+        self._need_to_advance = False
+
+    def next(self):
+        if self._need_to_advance:
+            self._advance()
+        if self._has_next:
+            self._need_to_advance = True
+            return self._cache
+        else:
+            raise StopIteration()
+
+    def __next__(self):
+        self.next()
+
+def execute(program):
+    tokens = LookAheadIterator(tokenize(program))
+    context = Context()
+    ret_list = ASTNode(ListSType())
+    while tokens.has_next():
+        tree = ASTNode.from_stream(context, tokens)
+        evaled = tree.evaluate(context)
+        ret_list.children.append(evaled)
+    return ret_list
 
 if __name__ == "__main__":
     import sys
