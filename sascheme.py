@@ -52,7 +52,7 @@ class NaryFunction(Function):
 
     def apply(self, xs):
         xs = iter(xs)
-        args = [xs.next().stype for i in xrange(self.arity())]
+        args = (xs.next().stype for i in xrange(self.arity()))
         return self.operation(*args)
 
 
@@ -205,8 +205,18 @@ class StreamSType(SType):
 
 class ListSType(SType):
     name = "list"
-    def __init__(self):
+    def __init__(self, child_stypes=None):
         SType.__init__(self)
+        self.child_stypes = child_stypes
+    def __str__(self):
+        s = '<'+self.__class__.__name__+' name="%s"' % (self.name)
+        if self.child_stypes is not None:
+            s += '>\n'
+            s += '\n'.join('\t'+str(cs) for cs in self.child_stypes)
+            s += '\n'
+            return s + '</'+self.__class__.__name__+'>'
+        else:
+            return s + '/>'
 
 ####
 
@@ -311,7 +321,8 @@ class ASTNode(object):
         end = '</ASTNode>'
         tabs = lambda t: "\t"*t
         s =  tabs(depth)+start+"\n"
-        s += tabs(depth+1)+type_str+"\n"
+        for line in type_str.split('\n'):
+            s += tabs(depth+1)+line+"\n"
         child_strs = [child.nodestr(depth+2) for child in self.children]
         if len(child_strs) > 0:
             s += tabs(depth+1)+"<ASTNode.children>\n"
@@ -322,31 +333,42 @@ class ASTNode(object):
         s += tabs(depth)+end
         return s
 
+    @staticmethod
+    def print_change(token, depth, from_node, to_node):
+        print token, "*"*(depth+1)
+        print from_node 
+        print token, "*"*(depth+1)
+        print to_node
+        print token, "*"*(depth+1)
+
+
     def evaluate(self, context, depth=0):
         if type(self.stype) == ListSType:
             if len(self.children) > 0:
                 first_child = self.children[0]
+                # evaluate first child from stream
                 if type(first_child.stype) == StreamSType:
                     first_child = first_child.evaluate(context, depth+1)
+                # if is identifier type, then do function applicaiton
                 if type(first_child.stype) == IdentSType:
                     function = context.get_function(first_child.stype.value)
                     ec_iter = (child.evaluate(context, depth+1) for child in self.children[1:])
                     new_stype = function.apply(ec_iter)
                     new_node = ASTNode(new_stype)
-                    print first_child.stype.token, "*"*(depth+1)
-                    print self
-                    print first_child.stype.token, "*"*(depth+1)
-                    print new_node
-                    print first_child.stype.token, "*"*(depth+1)
+                    ASTNode.print_change(first_child.stype.token, depth, self, new_node)
+                    return new_node
+                # else return a list node with list type info for children
+                else:
+                    ec_iter = (child.evaluate(context, depth+1) for child in self.children)
+                    new_stype = ListSType((child.stype for child in ec_iter))
+                    new_node = ASTNode(new_stype)
+                    new_node.children = self.children
                     return new_node
         elif type(self.stype) == StreamSType:
-            print "STREAM", "*"*(depth+1)
-            print self
-            print "STREAM", "*"*(depth+1)
             new_node = ASTNode.from_stream(context, self.stype.stream)
-            print new_node
-            print "STREAM", "*"*(depth+1)
+            ASTNode.print_change("STREAM", depth, self, new_node)
             return new_node.evaluate(context, depth)
+        # not a stream or list to reify or function application?
         return self
 
     @staticmethod
