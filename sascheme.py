@@ -40,52 +40,6 @@ def is_valid(tokens):
 ####
 
 
-class Function(object):
-    def __init__(self, return_stype):
-        self.return_stype = return_stype
-    def arity(self):
-        return 0
-    def evaluate(self, context, nodes):
-        raise Exception("OVERRIDE PLEASE")
-
-class ConstantFunction(Function):
-    def __init__(self, return_stype, node_value):
-        Function.__init__(self, return_stype)
-        self.node_value = node_value
-    def evaluate(self, context, nodes):
-        return self.node_value.evaluate(context, nodes)
-
-class LambdaFunction(ConstantFunction):
-    def __init__(self, return_stype, node_value, bindings):
-        ConstantFunction.__init__(self, return_stype, node_value)
-        self.bindings = bindings
-    def arity(self):
-        return -1 # make arity checks fail
-
-# lifts an stype* -> stype function to astnode* -> stype
-class NaryFunction(Function):
-    def __init__(self, return_type, argument_types, operation):
-        Function.__init__(self, return_type)
-        self.argument_types = argument_types
-        self.operation = operation
-    def arity(self):
-        return len(self.argument_types)
-    def evaluate(self, context, nodes):
-        nodes = iter(nodes)
-        nargs = [nodes.next() for i in xrange(self.arity())]
-        for i in xrange(len(nargs)):
-            if type(nargs[i].stype) == StreamSType:
-                nargs[i] = nargs[i].evaluate(context)
-            if type(nargs[i].stype) == IdentSType:
-                func = context.get_function(nargs[i].stype.token)
-                if func.arity() == 0:
-                    nargs[i] = func.evaluate(context, [])
-        stypes = [narg.stype for narg in nargs]
-        return self.operation(*stypes)
-
-####
-
-
 class MetaSType(type): pass
 
 class SType(object): 
@@ -238,6 +192,60 @@ class ListSType(SType):
 
 ####
 
+class Function(SType):
+    def __init__(self, token, return_stype):
+        SType.__init__(self, token)
+        self.return_stype = return_stype
+    def arity(self):
+        return 0
+    def evaluate(self, context, nodes):
+        raise Exception("OVERRIDE PLEASE")
+
+class ConstantFunction(Function):
+    def __init__(self, token, stype_value):
+        Function.__init__(self, token, stype_value.__class__)
+        self.stype_value = stype_value
+    def evaluate(self, context, nodes):
+        return self.stype_value
+
+class LambdaFunction(Function):
+    def __init__(self, token, stype_value, bindings):
+        Function.__init__(self, token, stype_value.__class__)
+        self.stype_value = stype_value
+        self.bindings = bindings
+    def arity(self):
+        return -1 # make arity checks fail
+    def evaluate(self, context, nodes):
+        evaled = self.stype_value
+        if type(evaled) == StreamSType:
+            evaled = ASTNode.from_stream(context, evaled.stream)
+        while type(evaled) == IdentSType:
+            function = context.get_by_identifier(evaled.token)
+            evaled = function.evaluate(context, nodes)
+        return evaled
+
+# lifts an stype* -> stype function to astnode* -> stype
+class NaryFunction(Function):
+    def __init__(self, token, return_type, argument_types, operation):
+        Function.__init__(self, token, return_type)
+        self.argument_types = argument_types
+        self.operation = operation
+    def arity(self):
+        return len(self.argument_types)
+    def evaluate(self, context, nodes):
+        nodes = iter(nodes)
+        nargs = [nodes.next() for i in xrange(self.arity())]
+        for i in xrange(len(nargs)):
+            if type(nargs[i].stype) == StreamSType:
+                nargs[i] = nargs[i].evaluate(context)
+            while type(nargs[i].stype) == IdentSType:
+                func = context.get_by_identifier(nargs[i].stype.token)
+                if type(func) == ConstantFunction:
+                    nargs[i] = ASTNode(func.evaluate(context, None))
+        stypes = [narg.stype for narg in nargs]
+        return self.operation(*stypes)
+
+####
 
 class BasicTypeBoxer(object):
     types = [
@@ -281,24 +289,24 @@ def op_neq(a, b): return op_not(op_eq(a,b))
 
 
 class BasicFunctionResolver(object):
-    builtin_functions = {
-        "+"     : NaryFunction(NumSType, [NumSType, NumSType], op_add),
-        "-"     : NaryFunction(NumSType, [NumSType, NumSType], op_sub),
-        "*"     : NaryFunction(NumSType, [NumSType, NumSType], op_mul),
-        "/"     : NaryFunction(NumSType, [NumSType, NumSType], op_div),
-        "%"     : NaryFunction(NumSType, [NumSType, NumSType], op_mod),
-        "neg"   : NaryFunction(NumSType, [NumSType], op_neg),
-        "not"   : NaryFunction(BoolSType, [BoolSType], op_not),
-        "and"   : NaryFunction(BoolSType, [BoolSType, BoolSType], op_and),
-        "or"    : NaryFunction(BoolSType, [BoolSType, BoolSType], op_or),
-        ">"     : NaryFunction(BoolSType, [NumSType, NumSType], op_gt),
-        "<"     : NaryFunction(BoolSType, [NumSType, NumSType], op_lt),
-        "=="    : NaryFunction(BoolSType, [SType, SType], op_eq),
-        ">="    : NaryFunction(BoolSType, [NumSType, NumSType], op_gte),
-        "<="    : NaryFunction(BoolSType, [NumSType, NumSType], op_lte),
-        "!="    : NaryFunction(BoolSType, [SType, SType], op_neq)
-    }
-    
+    builtin_functions = dict((func.token, func) for func in [
+        NaryFunction("+", NumSType, [NumSType, NumSType], op_add),
+        NaryFunction("-", NumSType, [NumSType, NumSType], op_sub),
+        NaryFunction("*", NumSType, [NumSType, NumSType], op_mul),
+        NaryFunction("/", NumSType, [NumSType, NumSType], op_div),
+        NaryFunction("%", NumSType, [NumSType, NumSType], op_mod),
+        NaryFunction("neg", NumSType, [NumSType], op_neg),
+        NaryFunction("not", BoolSType, [BoolSType], op_not),
+        NaryFunction("and", BoolSType, [BoolSType, BoolSType], op_and),
+        NaryFunction("or", BoolSType, [BoolSType, BoolSType], op_or),
+        NaryFunction(">", BoolSType, [NumSType, NumSType], op_gt),
+        NaryFunction("<", BoolSType, [NumSType, NumSType], op_lt),
+        NaryFunction("==", BoolSType, [SType, SType], op_eq),
+        NaryFunction(">=", BoolSType, [NumSType, NumSType], op_gte),
+        NaryFunction("<=", BoolSType, [NumSType, NumSType], op_lte),
+        NaryFunction("!=", BoolSType, [SType, SType], op_neq)
+    ])
+
     def get_function(self, token):
         return self.builtin_functions[token]
     
@@ -306,9 +314,10 @@ class BasicFunctionResolver(object):
 class CustomFunctionResolver(BasicFunctionResolver, Function):
     def __init__(self):
         BasicFunctionResolver.__init__(self)
-        Function.__init__(self, ListSType) 
-        self.custom_functions = {}
         self.func_name = "define"
+        Function.__init__(self, self.func_name, ListSType)
+        self.custom_functions = {}
+        self.custom_variables = {}
 
     def arity(self):
         return 2
@@ -318,15 +327,16 @@ class CustomFunctionResolver(BasicFunctionResolver, Function):
         from_node = nodes.next()
         to_node = nodes.next()
         if type(from_node.stype) == IdentSType:
-            self.custom_functions[from_node.stype.token] = \
-                ConstantFunction(IdentSType, to_node)
+            token = from_node.stype.token
+            self.set_variable(token,
+                ConstantFunction(token, to_node.stype))
         elif type(from_node.stype) == StreamSType:
             token = from_node.stype.stream[1]
             bindings = from_node.stype.stream[1:-1]
             if token == ")":
                 raise Exception("Invalid define pattern in to: "+str(from_node))
             else:
-                self.custom_functions[token] = LambdaFunction(IdentSType, to_node, bindings)
+                self.set_function(token, LambdaFunction(token, to_node.stype, bindings))
         else:
             raise Exception("Invalid define pattern in from: "+str(from_node))
         return ListSType()
@@ -341,13 +351,24 @@ class CustomFunctionResolver(BasicFunctionResolver, Function):
 
     def set_function(self, token, function):
         try:
-            BasicFunctionResolver.get_function(token)
+            BasicFunctionResolver.get_function(self, token)
             raise Exception("Token already present in builtins: "+token)
         except KeyError:
             if token == self.func_name:
                 raise Exception("Token is def keyword: "+token)
             self.custom_functions[token] = function 
 
+    def get_variable(self, token):
+        return self.custom_variables[token]
+
+    def set_variable(self, token, function):
+        self.custom_variables[token] = function
+
+    def get_by_identifier(self, token):
+        try:
+            return self.get_function(token)
+        except KeyError:
+            return self.get_variable(token)
 
 
 class Context(CustomFunctionResolver, BasicTypeBoxer): pass
@@ -404,12 +425,13 @@ class ASTNode(object):
                     first_child = first_child.evaluate(context, depth+1)
                 # if is identifier type, then do function application
                 if type(first_child.stype) == IdentSType:
-                    function = context.get_function(first_child.stype.token)
-                    if function.arity() == num_children-1:
+                    while type(first_child.stype) == IdentSType:
+                        function = context.get_function(first_child.stype.token)
                         new_stype = function.evaluate(context, self.children[1:])
                         new_node = ASTNode(new_stype)
                         ASTNode.print_change(first_child.stype.token, depth, self, new_node)
-                        return new_node
+                        first_child = new_node
+                    return first_child
         elif type(self.stype) == StreamSType:
             new_node = ASTNode.from_stream(context, self.stype.stream)
             ASTNode.print_change("STREAM", depth, self, new_node)
