@@ -208,16 +208,20 @@ class ConstantFunction(Function):
         return self.stype_value
 
 class LambdaFunction(Function):
-    def __init__(self, token, stype_value, bindings):
+    def __init__(self, token, stype_value, bound_vars):
         Function.__init__(self, token)
         self.stype_value = stype_value
-        self.bindings = bindings
+        self.bound_vars = bound_vars
     def arity(self):
         return -1 # make arity checks fail
     def type_apply(self, context, nodes):
         head = ASTNode(self.stype_value)
         head.children = nodes
-        return head.applied(context).stype
+        #print "LAMBDA TYPE_APPLY"
+        #print nodes
+        #print self.bound_vars
+        lazily_bound_context = LazilyBoundContext(context, self.bound_vars, nodes)
+        return head.applied(lazily_bound_context).stype
 
 # lifts an stype* -> stype function to astnode* -> stype
 class NaryFunction(Function):
@@ -242,6 +246,8 @@ class STypeSuspension(object):
         if key in self.cache:
             return self.cache[key]
         else:
+            #print "UNSUSPENDING: ", key
+            #print self.nodes[key]
             value = self.nodes[key].applied(self.context).stype
             self.cache[key] = value
             return value
@@ -308,14 +314,23 @@ class BasicFunctionResolver(object):
         NaryFunction("!=", BoolSType, [SType, SType], op_neq),
         NaryFunction("first", BoolSType, None, op_first)
     ])
-
+    builtin_variables = {}
     def get_function(self, token):
         return self.builtin_functions[token]
+    def get_variable(self, token):
+        return self.builtin_variables[token]
+    def get_by_identifier(self, token):
+        try:
+            return self.get_function(token)
+        except KeyError:
+            return self.get_variable(token)
+
     
 
 class CustomFunctionResolver(BasicFunctionResolver, Function):
-    def __init__(self):
+    def __init__(self, parent=None):
         BasicFunctionResolver.__init__(self)
+        self.parent = BasicFunctionResolver() if parent is None else parent
         self.func_name = "define"
         Function.__init__(self, self.func_name)
         self.custom_functions = {}
@@ -334,48 +349,63 @@ class CustomFunctionResolver(BasicFunctionResolver, Function):
             self.set_variable(token,
                 ConstantFunction(token, to_node.strict(context).stype))
         elif type(from_node.stype) == StreamSType:
-            token = from_node.stype.stream[1]
-            bindings = from_node.stype.stream[1:-1]
+            stream = from_node.stype.stream
+            token = stream[1]
+            bound_vars = stream[2:-1] if len(stream) > 3 else []
             if token == ")":
                 raise Exception("Invalid define pattern in to: "+str(from_node))
             else:
-                self.set_function(token, LambdaFunction(token, to_node.stype, bindings))
+                self.set_function(token, LambdaFunction(token, to_node.stype, bound_vars))
         else:
             raise Exception("Invalid define pattern in from: "+str(from_node))
         return ListSType()
 
     def get_function(self, token):
         try:
-            return BasicFunctionResolver.get_function(self, token)
+            return self.parent.get_function(token)
         except KeyError:
             if token == self.func_name:
                 return self
             return self.custom_functions[token]
 
     def set_function(self, token, function):
-        try:
-            BasicFunctionResolver.get_function(self, token)
-            raise Exception("Token already present in builtins: "+token)
-        except KeyError:
-            if token == self.func_name:
-                raise Exception("Token is def keyword: "+token)
-            self.custom_functions[token] = function 
+        if token == self.func_name:
+            raise Exception("Token is def keyword: "+token)
+        self.custom_functions[token] = function 
 
     def get_variable(self, token):
-        return self.custom_variables[token]
+        try:
+            return self.parent.get_variable(token)
+        except KeyError:
+            return self.custom_variables[token]
 
     def set_variable(self, token, function):
-        self.custom_variables[token] = function
-
-    def get_by_identifier(self, token):
-        try:
-            return self.get_function(token)
-        except KeyError:
-            return self.get_variable(token)
+        self.custom_functions[token] = function 
 
 
-class Context(CustomFunctionResolver, BasicTypeBoxer): pass
+class Context(CustomFunctionResolver, BasicTypeBoxer): 
+    def __init__(self, parent=None):
+        CustomFunctionResolver.__init__(self, parent)
 
+class LazilyBoundContext(Context):
+    def __init__(self, parent, bound_vars, nodes):
+        Context.__init__(self, parent)
+        self.bound_vars = bound_vars
+        self.nodes = nodes
+        self.cache = {}
+    def set_variable(self, token, function):
+        self.cache[token] = function
+    def get_variable(self, token):
+        if token in self.cache:
+            return self.cache[token]
+        else:
+            for i in xrange(len(self.bound_vars)):
+                key = self.bound_vars[i]
+                if key == token:
+                    function = ConstantFunction(token, self.nodes[i].applied(self.parent).stype)
+                    self.set_variable(token, function)
+                    return function 
+        return self.parent.get_variable(token)
 
 ####
 
@@ -411,8 +441,8 @@ class ASTNode(object):
                 tail_nodes = tail_nodes[1:]
         if type(head_stype) == IdentSType:
             #print "applied"
-            function = context.get_by_identifier(head_stype.token)
             #print "head_stype", head_stype
+            function = context.get_by_identifier(head_stype.token)
             #print "function", function
             new_stype = function.type_apply(context, tail_nodes)
             new_node = ASTNode(new_stype)
