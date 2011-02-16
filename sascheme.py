@@ -230,13 +230,21 @@ class NaryFunction(Function):
         return len(self.argument_types)
     def type_apply(self, context, nodes):
         nodes = list(nodes)
-        print "nodes", nodes
-        print self.arity()
-        nargs = [nodes[i].applied(context) for i in xrange(self.arity())]
-        print "nargs", nargs
-        stypes = [narg.stype for narg in nargs]
-        print "stypes", stypes
-        return self.operation(*stypes)
+        stypes = STypeSuspension(nodes, context)
+        return self.operation(stypes)
+
+class STypeSuspension(object):
+    def __init__(self, nodes, context):
+        self.cache = {}
+        self.nodes = nodes
+        self.context = context
+    def __getitem__(self, key):
+        if key in self.cache:
+            return self.cache[key]
+        else:
+            value = self.nodes[key].applied(self.context).stype
+            self.cache[key] = value
+            return value
 
 ####
 
@@ -264,22 +272,22 @@ class BasicTypeBoxer(object):
 #### NUMERIC / LOGICAL OPERATIONS ####
 
 
-def op_add(a, b): return NumSType(a.unbox_num()+b.unbox_num())
-def op_sub(a, b): return NumSType(a.unbox_num()-b.unbox_num())
-def op_mul(a, b): return NumSType(a.unbox_num()*b.unbox_num())
-def op_div(a, b): return NumSType(a.unbox_num()/b.unbox_num())
-def op_mod(a, b): return NumSType(a.unbox_num()%b.unbox_num())
-def op_neg(a):    return NumSType(-a.unbox_num())
-def op_not(a):    return BoolSType(not a.unbox_bool())
-def op_and(a, b): return BoolSType(a.unbox_bool() and b.unbox_bool())
-def op_or(a, b):  return BoolSType(a.unbox_bool() or b.unbox_bool())
-def op_gt(a, b):  return BoolSType(a.unbox_num() > b.unbox_num())
-def op_lt(a, b):  return BoolSType(a.unbox_num() < b.unbox_num())
-def op_eq(a, b):  return BoolSType(a.value == b.value)
-def op_gte(a, b): return op_or(op_gt(a,b), op_eq(a,b))
-def op_lte(a, b): return op_or(op_lt(a,b), op_eq(a,b))
-def op_neq(a, b): return op_not(op_eq(a,b))
-
+def op_add(args): return NumSType(args[0].unbox_num()+args[1].unbox_num())
+def op_sub(args): return NumSType(args[0].unbox_num()-args[1].unbox_num())
+def op_mul(args): return NumSType(args[0].unbox_num()*args[1].unbox_num())
+def op_div(args): return NumSType(args[0].unbox_num()/args[1].unbox_num())
+def op_mod(args): return NumSType(args[0].unbox_num()%args[1].unbox_num())
+def op_neg(args):    return NumSType(-args[0].unbox_num())
+def op_not(args):    return BoolSType(not args[0].unbox_bool())
+def op_and(args): return BoolSType(args[0].unbox_bool() and args[1].unbox_bool())
+def op_or(args):  return BoolSType(args[0].unbox_bool() or args[1].unbox_bool())
+def op_gt(args):  return BoolSType(args[0].unbox_num() > args[1].unbox_num())
+def op_lt(args):  return BoolSType(args[0].unbox_num() < args[1].unbox_num())
+def op_eq(args):  return BoolSType(args[0].value == args[1].value)
+def op_gte(args): a = args[0]; b = args[1]; return op_or(op_gt(a,b), op_eq(a,b))
+def op_lte(args): a = args[0]; b = args[1]; return op_or(op_lt(a,b), op_eq(a,b))
+def op_neq(args): a = args[0]; b = args[1]; return op_not(op_eq(a,b))
+def op_first(args): return args[0]
 
 class BasicFunctionResolver(object):
     builtin_functions = dict((func.token, func) for func in [
@@ -297,7 +305,8 @@ class BasicFunctionResolver(object):
         NaryFunction("==", BoolSType, [SType, SType], op_eq),
         NaryFunction(">=", BoolSType, [NumSType, NumSType], op_gte),
         NaryFunction("<=", BoolSType, [NumSType, NumSType], op_lte),
-        NaryFunction("!=", BoolSType, [SType, SType], op_neq)
+        NaryFunction("!=", BoolSType, [SType, SType], op_neq),
+        NaryFunction("first", BoolSType, None, op_first)
     ])
 
     def get_function(self, token):
