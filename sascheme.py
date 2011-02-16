@@ -193,56 +193,49 @@ class ListSType(SType):
 ####
 
 class Function(SType):
-    def __init__(self, token, return_stype):
+    def __init__(self, token):
         SType.__init__(self, token)
-        self.return_stype = return_stype
     def arity(self):
         return 0
-    def evaluate(self, context, nodes):
+    def type_apply(self, context, nodes):
         raise Exception("OVERRIDE PLEASE")
 
 class ConstantFunction(Function):
     def __init__(self, token, stype_value):
-        Function.__init__(self, token, stype_value.__class__)
+        Function.__init__(self, token)
         self.stype_value = stype_value
-    def evaluate(self, context, nodes):
+    def type_apply(self, context, nodes):
         return self.stype_value
 
 class LambdaFunction(Function):
     def __init__(self, token, stype_value, bindings):
-        Function.__init__(self, token, stype_value.__class__)
+        Function.__init__(self, token)
         self.stype_value = stype_value
         self.bindings = bindings
     def arity(self):
         return -1 # make arity checks fail
-    def evaluate(self, context, nodes):
-        evaled = self.stype_value
-        if type(evaled) == StreamSType:
-            evaled = ASTNode.from_stream(context, evaled.stream)
-        while type(evaled) == IdentSType:
-            function = context.get_by_identifier(evaled.token)
-            evaled = function.evaluate(context, nodes)
-        return evaled
+    def type_apply(self, context, nodes):
+        head = ASTNode(self.stype_value)
+        head.children = nodes
+        return head.applied(context).stype
 
 # lifts an stype* -> stype function to astnode* -> stype
 class NaryFunction(Function):
     def __init__(self, token, return_type, argument_types, operation):
-        Function.__init__(self, token, return_type)
+        Function.__init__(self, token)
+        self.return_type = return_type
         self.argument_types = argument_types
         self.operation = operation
     def arity(self):
         return len(self.argument_types)
-    def evaluate(self, context, nodes):
-        nodes = iter(nodes)
-        nargs = [nodes.next() for i in xrange(self.arity())]
-        for i in xrange(len(nargs)):
-            if type(nargs[i].stype) == StreamSType:
-                nargs[i] = nargs[i].evaluate(context)
-            while type(nargs[i].stype) == IdentSType:
-                func = context.get_by_identifier(nargs[i].stype.token)
-                if type(func) == ConstantFunction:
-                    nargs[i] = ASTNode(func.evaluate(context, None))
+    def type_apply(self, context, nodes):
+        nodes = list(nodes)
+        print "nodes", nodes
+        print self.arity()
+        nargs = [nodes[i].applied(context) for i in xrange(self.arity())]
+        print "nargs", nargs
         stypes = [narg.stype for narg in nargs]
+        print "stypes", stypes
         return self.operation(*stypes)
 
 ####
@@ -315,21 +308,22 @@ class CustomFunctionResolver(BasicFunctionResolver, Function):
     def __init__(self):
         BasicFunctionResolver.__init__(self)
         self.func_name = "define"
-        Function.__init__(self, self.func_name, ListSType)
+        Function.__init__(self, self.func_name)
         self.custom_functions = {}
         self.custom_variables = {}
 
     def arity(self):
         return 2
 
-    def evaluate(self, context, nodes):
+    def type_apply(self, context, nodes):
+        #print "type_apply"
         nodes = iter(nodes)
         from_node = nodes.next()
         to_node = nodes.next()
         if type(from_node.stype) == IdentSType:
             token = from_node.stype.token
             self.set_variable(token,
-                ConstantFunction(token, to_node.stype))
+                ConstantFunction(token, to_node.strict(context).stype))
         elif type(from_node.stype) == StreamSType:
             token = from_node.stype.stream[1]
             bindings = from_node.stype.stream[1:-1]
@@ -388,6 +382,37 @@ class ASTNode(object):
     def __str__(self):
         return self.nodestr()
 
+    def is_strict(self):
+        return type(self.stype) != StreamSType
+
+    def strict(self, context):
+        if not self.is_strict():
+            return ASTNode.from_stream(context, self.stype.stream)
+        else:
+            return self
+
+    def applied(self, context):
+        strict_self = self.strict(context)
+        head_stype = strict_self.stype
+        tail_nodes = strict_self.children
+        if type(head_stype) == ListSType:
+            if len(tail_nodes) > 0 and \
+               type(tail_nodes[0].stype) == IdentSType:
+                head_stype = tail_nodes[0].stype
+                tail_nodes = tail_nodes[1:]
+        if type(head_stype) == IdentSType:
+            #print "applied"
+            function = context.get_by_identifier(head_stype.token)
+            #print "head_stype", head_stype
+            #print "function", function
+            new_stype = function.type_apply(context, tail_nodes)
+            new_node = ASTNode(new_stype)
+            #print "new_node", new_node
+            ASTNode.print_change(head_stype.token, -1, self, new_node)
+            return new_node.applied(context)
+        return strict_self
+
+
     def nodestr(self, depth=0):
         start = '<ASTNode>' 
         type_str = str(self.stype)
@@ -414,29 +439,6 @@ class ASTNode(object):
         print to_node
         print token, "*"*(depth+1)
 
-
-    def evaluate(self, context, depth=0):
-        if type(self.stype) == ListSType:
-            num_children = len(self.children)
-            if num_children > 0:
-                first_child = self.children[0]
-                # evaluate first child from stream
-                if type(first_child.stype) == StreamSType:
-                    first_child = first_child.evaluate(context, depth+1)
-                # if is identifier type, then do function application
-                if type(first_child.stype) == IdentSType:
-                    while type(first_child.stype) == IdentSType:
-                        function = context.get_function(first_child.stype.token)
-                        new_stype = function.evaluate(context, self.children[1:])
-                        new_node = ASTNode(new_stype)
-                        ASTNode.print_change(first_child.stype.token, depth, self, new_node)
-                        first_child = new_node
-                    return first_child
-        elif type(self.stype) == StreamSType:
-            new_node = ASTNode.from_stream(context, self.stype.stream)
-            ASTNode.print_change("STREAM", depth, self, new_node)
-            return new_node.evaluate(context, depth)
-        return self
 
     @staticmethod
     def from_stream_lazy(tokens):
@@ -546,8 +548,8 @@ def execute(program):
     ret_list = ASTNode(ListSType())
     while tokens.has_next():
         tree = ASTNode.from_stream(context, tokens)
-        evaled = tree.evaluate(context)
-        ret_list.children.append(evaled)
+        applied = tree.applied(context)
+        ret_list.children.append(applied)
     return ret_list
 
 if __name__ == "__main__":
