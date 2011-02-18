@@ -4,13 +4,21 @@ import collections
 import itertools
 
 def tokenize(stream):
+    in_comment = False
     last = []
     for c in stream:
-        if c == " " or c == "\t" or c =="\n":
-            if len(last) > 0: 
+        if in_comment:
+            if c == "\n":
+                in_comment = False
+                if len(last) > 0:
+                    yield "".join(last)
+                    last = []
+        elif c == ";":
+            in_comment = True
+        elif c == " " or c == "\t" or c == "\n":
+            if len(last) > 0:
                 yield "".join(last)
                 last = []
-            continue
         elif c == "(" or c == ")":
             if len(last) > 0: 
                 yield "".join(last)
